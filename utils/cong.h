@@ -1,6 +1,6 @@
 /*
 @Author: Lzww
-@LastEditTime: 2025-9-17 20:00:00
+@LastEditTime: 2025-10-9 21:50:05
 @Description: Congestion Control Framework - Support for Reno, Cubic, BIC, BBR, etc.
 @Language: C++17
 */
@@ -13,6 +13,8 @@
 #include <string>
 #include <memory>
 
+using TypeId = uint64_t;
+
 // TCP connection states
 enum class TCPState {
     Open,     // normal state
@@ -24,14 +26,12 @@ enum class TCPState {
 
 // Congestion control algorithm types
 enum class CongestionAlgorithm {
-    Reno,
-    NewReno,
-    Cubic,
-    BIC,
     BBR,
-    BBRv2,
-    Vegas,
-    Westwood
+    BIC,
+    CUBIC,
+    DCTCP,
+    RENO,
+    VEGAS,
 };
 
 // Congestion event types
@@ -45,7 +45,7 @@ enum class CongestionEvent {
     Reordering              // packet reordering
 };
 
-// Basic data structures - keep only essential ones, complex algorithms can define their own
+// Basic data structures
 
 // Simple RTT information (algorithms like BBR can extend this)
 struct RTTSample {
@@ -53,7 +53,7 @@ struct RTTSample {
     RTTSample(std::chrono::microseconds r = std::chrono::microseconds(0)) : rtt(r) {}
 };
 
-// Basic congestion control parameters (algorithms can extend as needed)
+// Basic congestion control parameters
 struct BasicCongestionParams {
     uint32_t mss;               // maximum segment size
     uint32_t max_cwnd;          // maximum congestion window
@@ -61,44 +61,97 @@ struct BasicCongestionParams {
     BasicCongestionParams() : mss(1460), max_cwnd(65535) {}
 };
 
+
+class SocketState {
+public: 
+    SocketState();
+    virtual ~SocketState() = default;
+
+    TCPState tcp_state_;
+    CongestionEvent congestion_event_;
+    uint32_t cwnd_;
+    uint32_t ssthresh_;
+    uint32_t max_cwnd_;
+    uint32_t mss_bytes_;
+    uint32_t rtt_us_;
+    uint32_t rto_us_;
+    uint32_t rtt_var_;
+};
+
 // Congestion control base class (pure virtual) - contains only core interfaces
 class CongestionControl {
 public:
+    CongestionControl(TypeId type_id, std::string algorithm_name);
     virtual ~CongestionControl() = default;
 
-    // ====== Core pure virtual interfaces - must be implemented by all algorithms ======
-    
-    // Algorithm identification
-    virtual CongestionAlgorithm GetAlgorithm() const = 0;
-    
-    // Core congestion control events - the three most basic events
-    virtual void OnAck(uint32_t acked_bytes) = 0;        // ACK received (basic version)
-    virtual void OnLoss() = 0;                           // packet loss detected
-    virtual void OnTimeout() = 0;                        // timeout occurred
-    
-    // Extended version - algorithms that need RTT information can override this method
-    virtual void OnAck(uint32_t acked_bytes, const RTTSample& rtt) {
-        OnAck(acked_bytes);  // default calls basic version, ignoring RTT
-    }
+    /**
+     * @brief Get the type ID.
+     * @return the object type ID.
+     */
+    TypeId GetTypeId();
 
-    // Window management - basic window retrieval
-    virtual uint32_t GetCongestionWindow() const = 0;    // get current congestion window
-    
-    // ====== Optional interfaces - different algorithms may need, with default empty implementations ======
-    
-    // Extended event handling (some algorithms may not need)
-    virtual void OnECN() {}                              // ECN signal (optional)
-    virtual void OnReordering() {}                       // packet reordering (optional)
-    
-    // Optional parameter configuration (not all algorithms need)
-    virtual void SetMSS(uint32_t mss) {}                // set MSS (optional)
-    virtual void SetMaxWindow(uint32_t max_cwnd) {}      // set maximum window (optional)
-    
-    // Optional state queries
-    virtual uint32_t GetSlowStartThreshold() const { return UINT32_MAX; } // slow start threshold (optional)
-    
-    // Debug interface (optional)
-    virtual std::string GetStatusString() const { return ""; }  // status string (optional)
+    void SetTypeId(TypeId type_id) [[maybe_unused]];
+
+
+    /**
+     * @brief Get the name of the congestion control algorithm
+     *
+     * @return A string identifying the name
+     */
+    virtual std::string GetAlgorithmName() = 0;
+
+    /**
+     * @brief Get the slow start threshold.
+     *
+     * @param socket internal congestion state
+     * @param bytesInFlight total bytes in flight
+     * @return Slow start threshold
+     */
+    virtual uint32_t GetSsThresh(std::unique_ptr<SocketState>& socket, uint32_t bytesInFlight) = 0;
+
+    /**
+     * @brief Increase the congestion window.
+     *
+     * @param socket internal congestion state
+     * @param segmentsAcked number of segments acked
+     */
+    virtual void IncreaseWindow(std::unique_ptr<SocketState>& socket, uint32_t segmentsAcked);
+
+    /**
+     * @brief Handle packets acked.
+     *
+     * @param socket internal congestion state
+     * @param segmentsAcked number of segments acked
+     * @param rtt round trip time
+     */
+    virtual void PktsAcked(std::unique_ptr<SocketState>& socket, uint32_t segmentsAcked, const uint64_t rtt);
+
+    /**
+     * @brief Set the congestion state.
+     *
+     * @param socket internal congestion state
+     * @param congestionState congestion state
+     */
+    virtual void CongestionStateSet(std::unique_ptr<SocketState>& socket, const TCPState congestionState);
+
+    /**
+     * @brief Handle the congestion event.
+     *
+     * @param socket internal congestion state
+     * @param congestionEvent congestion event
+     */
+    virtual void CwndEvent(std::unique_ptr<SocketState>& socket, const CongestionEvent congestionEvent);
+
+    /**
+     * @brief Check if the congestion control is enabled.
+     *
+     * @return true if the congestion control is enabled, false otherwise
+     */
+    virtual bool HasCongControl() const;
+
+    virtual void CongControl(std::unique_ptr<SocketState>& socket,
+                             const CongestionEvent& congestionEvent,
+                             const RTTSample& rtt);
 
 protected:
     // Constructor - can only be called by subclasses
@@ -108,6 +161,34 @@ private:
     // Disable copy and assignment
     CongestionControl(const CongestionControl&) = delete;
     CongestionControl& operator=(const CongestionControl&) = delete;
+
+    // Type identification
+    TypeId m_typeId;                        // Type identifier for this congestion control
+    std::string m_algorithmName;            // Name of the congestion control algorithm
+    
+    // TCP state management
+    TCPState m_tcpState;                    // Current TCP congestion state
+    CongestionEvent m_congestionEvent;      // Current congestion event type
+    
+    // Congestion window parameters
+    uint32_t m_cwnd;                        // Current congestion window size (in bytes)
+    uint32_t m_ssthresh;                    // Slow start threshold (in bytes)
+    uint32_t m_maxCwnd;                     // Maximum congestion window size (in bytes)
+    uint32_t m_segmentSize;                 // Maximum segment size (MSS in bytes)
+    uint32_t m_initialCwnd;                 // Initial congestion window size
+    
+    // RTT and RTO parameters
+    uint32_t m_rttUs;                       // Current round trip time (in microseconds)
+    uint32_t m_rtoUs;                       // Retransmission timeout (in microseconds)
+    uint32_t m_rttVar;                      // RTT variation for RTO calculation
+    uint32_t m_minRtt;                      // Minimum RTT observed (in microseconds)
+    
+    // Packet tracking
+    uint32_t m_bytesInFlight;               // Number of bytes currently in flight
+    uint32_t m_segmentsAcked;               // Number of segments acknowledged
+    
+    // Control flags
+    bool m_congControlEnabled;              // Whether congestion control is enabled
 };
 
 
