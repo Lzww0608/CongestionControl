@@ -325,25 +325,6 @@ g++ -std=c++17 -o cc_test \
 
 ---
 
-## 详细文档
-
-项目包含详细的算法文档，位于 `docs/` 目录：
-
-### BBR 文档
-- `docs/BBR/BBR.md`: BBR 四个阶段详解
-- `docs/BBR/RTT测量.md`: TCP 时间戳和 RTT 测量机制
-
-### Copa 文档
-- `docs/COPA/copa.md`: Copa 速度控制机制
-- `docs/COPA/排队延迟.md`: 排队延迟计算方法
-
-### DCTCP 文档
-- `docs/DCTCP/dctcp.md`: DCTCP α 参数更新算法
-- `docs/DCTCP/ecn.md`: ECN 三方协作机制
-- `docs/DCTCP/路由器ecn.md`: 路由器 ECN 配置
-
----
-
 ## 算法特性总结
 
 ### 基于丢包的算法 (Loss-based)
@@ -422,10 +403,6 @@ g++ -std=c++17 -o cc_test \
 ## Author
 
 **Lzww**  
-Last Update: 2025-10-13
+Last Update: 2025-10-16
 
 ---
-
-## 致谢
-
-感谢所有为 TCP 拥塞控制算法发展做出贡献的研究者和工程师们。
